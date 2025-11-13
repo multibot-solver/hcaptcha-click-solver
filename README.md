@@ -5,7 +5,10 @@ movement to [Multibot](https://multibot.in). The project drives a Patchright (Pl
 page, replays the exact cursor path returned from Multibot, and applies the provided
 answers to hCaptcha challenges.
 
-![hCaptcha demo](docs/demo-hcap.gif)
+<p>
+  <img src="docs/demo-hcap.gif" alt="hCaptcha demo" width="45%" />
+  <img src="docs/steam.gif" alt="Steam registration flow" width="45%" />
+</p>
 
 ## Features
 - Requests both tile/canvas classifications and mouse movement routes from Multibot.
@@ -32,7 +35,4 @@ answers to hCaptcha challenges.
 ## Notes
 - Multibot responses are consumed as-is; the script never alters the returned mouse path.
 - Ensure you comply with the terms of service for any website you interact with.
-
-![Steam registration flow](docs/steam.gif)
-
 
