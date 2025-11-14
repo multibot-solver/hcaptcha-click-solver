@@ -7,6 +7,8 @@ from patchright.async_api import (
     ElementHandle,
     Frame,
     Page,
+    Request,
+    Route,
     TimeoutError as PatchrightTimeoutError,
 )
 
@@ -25,6 +27,8 @@ class HCaptchaSolver:
         api_key: Multibot API key for fetching challenge solutions and human-like paths.
         attempt: Maximum number of solve iterations before giving up.
         last_mouse_position: Optional cursor coordinates to resume from between solver runs.
+        intercept_token: When True, intercepts the hCaptcha network response and returns
+            the token immediately without waiting for page scripts.
     """
 
     def __init__(
@@ -33,6 +37,7 @@ class HCaptchaSolver:
         api_key: str,
         attempt: int = 10,
         last_mouse_position: Optional[Dict[str, float]] = None,
+        intercept_token: bool = False,
     ) -> None:
         self.page = page
         self.api_key = api_key
@@ -42,6 +47,7 @@ class HCaptchaSolver:
             api_key,
         )
         self.attempt = attempt
+        self.intercept_token = intercept_token
         viewport = getattr(page, "viewport_size", None) or {}
         width = viewport.get("width") or 1920
         height = viewport.get("height") or 1080
@@ -59,6 +65,8 @@ class HCaptchaSolver:
         self.token = None
         self.checkbox_frame = None
         self.challenge_frame = None
+        self._token_event = asyncio.Event()
+        self._response_listener_attached = False
         
     def _get_last_mouse_position(self) -> Tuple[float, float]:
         position = self.last_mouse_position
@@ -66,6 +74,26 @@ class HCaptchaSolver:
 
     def _set_last_mouse_position(self, x: float, y: float) -> None:
         self.last_mouse_position = {"x": float(x), "y": float(y)}
+
+    async def _token_aware_sleep(self, delay: float) -> None:
+        if delay <= 0:
+            return
+        if not self.intercept_token:
+            await asyncio.sleep(delay)
+            return
+        if self.token or self._token_event.is_set():
+            return
+
+        sleep_task = asyncio.create_task(asyncio.sleep(delay))
+        event_task = asyncio.create_task(self._token_event.wait())
+        done, pending = await asyncio.wait(
+            [sleep_task, event_task],
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        for task in pending:
+            task.cancel()
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
 
     async def _handle_checkbox(self) -> bool:
         """
@@ -136,22 +164,44 @@ class HCaptchaSolver:
         if not answers:
             return False
 
+        if self.token:
+            return True
+
         applied = await self._apply_answers(frame, request_type, answers)
         if not applied:
             return False
 
+        if self.token:
+            return True
+
+        if self.token:
+            return True
+
         delay = 5 if await self._is_last_task() else 1
-        await asyncio.sleep(delay)
+        if self.token:
+            return True
+        await self._token_aware_sleep(delay)
         return True
 
     async def solve(self) -> Optional[str]:
         if not (self.api_key and str(self.api_key).strip()):
             log.failure("Multibot API key is missing; aborting solve()")
             return None
-        
+
+        self.token = None
+        if self._token_event.is_set():
+            self._token_event.clear()
+
+        if self.intercept_token:
+            await self._ensure_network_listener()
+
         for _ in range(self.attempt):
-            self.token = await self.wait_token(1_000)
             if self.token:
+                return self.token
+
+            token = await self.wait_token(1_000)
+            if token:
+                self.token = token
                 return self.token
 
             self.challenge_frame = await self._find_challenge_visual_frame()
@@ -167,13 +217,30 @@ class HCaptchaSolver:
                 continue
 
             await self._click_submit_button(self.challenge_frame)
-            await asyncio.sleep(0.8)
+            await self._token_aware_sleep(0.8)
 
         return self.token
 
-    async def wait_token(self, timeout=10_000):
+    async def wait_token(self, timeout: int = 10_000) -> Optional[str]:
+        if self.token:
+            return self.token
+
+        if self.intercept_token:
+            wait_seconds: Optional[float]
+            if timeout is None or timeout < 0:
+                wait_seconds = None
+            else:
+                wait_seconds = timeout / 1_000
+
+            try:
+                await asyncio.wait_for(self._token_event.wait(), timeout=wait_seconds)
+            except asyncio.TimeoutError:
+                return self.token
+            except Exception:  # noqa: BLE001
+                return self.token
+            return self.token
+
         try:
-            # Wait until hcaptcha.getResponse() returns a non-empty string
             token_handle = await self.page.wait_for_function(
                 """
                 () => {
@@ -186,12 +253,48 @@ class HCaptchaSolver:
                 """,
                 timeout=timeout,
             )
-            return await token_handle.json_value()
         except PatchrightTimeoutError:
             return None
         except Exception:  # noqa: BLE001
             return None
- 
+
+        try:
+            return await token_handle.json_value()
+        except Exception:  # noqa: BLE001
+            return None
+
+    async def _ensure_network_listener(self) -> None:
+        if not self.intercept_token or self._response_listener_attached:
+            return
+
+        async def _route_handler(route: Route, request: Request) -> None:
+            if "checkcaptcha" not in (request.url or ""):
+                await route.continue_()
+                return
+
+            try:
+                api_response = await route.fetch()
+            except Exception:
+                await route.abort("failed")
+                return
+
+            try:
+                data = await api_response.json()
+            except Exception:
+                await route.abort("failed")
+                return
+
+            token = (
+                data.get("generated_pass_UUID")
+            )
+            if isinstance(token, str) and token.strip():
+                self.token = token.strip()
+                self._token_event.set()
+
+            await route.abort("failed")
+
+        await self.page.route("**/checkcaptcha/**", _route_handler)
+        self._response_listener_attached = True
  
     async def _is_last_task(self) -> bool:
         try:
@@ -379,11 +482,10 @@ class HCaptchaSolver:
         if not body:
             return None
 
-        has_bounding = await frame.query_selector(".bounding-box-example") is not None
         has_header = await frame.query_selector(".challenge-header") is not None
-        has_grid = await frame.query_selector(".task-grid") is not None
-        is_drag = has_header and not has_bounding and not has_grid
-        request_type = "Drag" if is_drag else "Canvas"
+        question_lower = question.lower()
+        is_canvas = has_header and "drag" not in question_lower
+        request_type = "Canvas" if is_canvas else "Drag"
         examples = await self._collect_example_images(".example-image .image")
 
         return {
@@ -823,7 +925,3 @@ class HCaptchaSolver:
         target_y = box["y"] + box["height"] / 2
         await self.motion.click(target_x, target_y)
         self._set_last_mouse_position(target_x, target_y)
-
-        
-        
-        
