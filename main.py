@@ -7,7 +7,9 @@ from core.logger import log
 from core.solver import HCaptchaSolver
 
 
-APIKEY = "Your MultiBot Key"
+APIKEY = "Your MultiBot Key" # Your MultiBot Key
+ATTEMPT = 10 # Number of attempts
+INTERCEPT_TOKEN = False # True - Intercept the token
 
 
 async def main() -> None:
@@ -25,13 +27,11 @@ async def main() -> None:
         join_url = "https://store.steampowered.com/join/"
         await page.goto(join_url, wait_until="domcontentloaded")
 
-        await page.fill("#email", "multibot@gmail.com")
-        await page.fill("#reenter_email", "multibot@gmail.com")
-        
         solver = HCaptchaSolver(
             page,
             APIKEY,
-            attempt=10,
+            attempt=ATTEMPT,
+            intercept_token=INTERCEPT_TOKEN,
         )
         
         start_time = time.time()
@@ -40,9 +40,6 @@ async def main() -> None:
 
         if token:
             log.captcha(f"Captcha solved. Token: {token[:35]}", start_time, end_time)
-            await page.check("#i_agree_check")
-            await page.click("#createAccountButton")
-            time.sleep(10)
         else:
             log.failure("Couldn't get hCaptcha token", start_time, end_time)
 
@@ -58,4 +55,5 @@ async def main() -> None:
 
 if __name__ == "__main__":
     asyncio.run(main())
+
 
