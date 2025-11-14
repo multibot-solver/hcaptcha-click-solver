@@ -95,5 +95,7 @@ if __name__ == "__main__":
 
 ## Notes
 - Multibot responses are consumed as-is; the script never alters the returned mouse path.
+- Depending on the target site’s anti-bot posture, you may need to rotate or
+  fully customise the browser fingerprint (user agent, canvas data, WebRTC,
+  WebGL, fonts, etc.) so the intercepted token is accepted.
 - Ensure you comply with the terms of service for any website you interact with.
-
