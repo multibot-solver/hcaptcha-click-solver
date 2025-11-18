@@ -484,7 +484,7 @@ class HCaptchaSolver:
         question_lower = question.lower()
         is_canvas = has_header and "drag" not in question_lower
         request_type = "Canvas" if is_canvas else "Drag"
-        examples = await self._collect_example_images(".image")
+        examples = await self._collect_example_images(".example-wrapper .image")
 
         return {
             "question": question,
