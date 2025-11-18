@@ -458,7 +458,7 @@ class HCaptchaSolver:
         if not body:
             return None
 
-        examples = await self._collect_example_images(".challenge-example .image-wrapper .image")
+        examples = await self._collect_example_images(".challenge-example .image")
         return {
             "question": question,
             "request_type": "Grid",
