@@ -393,30 +393,28 @@ class HCaptchaSolver:
         self,
         selector: str,
     ) -> List[str]:
-        try:
-            examples = await self.challenge_frame.evaluate(
-                """
-                (selector) => {
-                    const items = Array.from(document.querySelectorAll(selector));
-                    const urls = [];
-                    for (const node of items) {
-                        const bg = window.getComputedStyle(node).backgroundImage;
-                        if (!bg || bg === 'none') continue;
-                        const match = bg.match(/url\\(["']?(.*?)["']?\\)/);
-                        if (match && match[1]) {
-                            urls.push(match[1]);
-                        }
-                    }
-                    return urls;
-                }
-                """,
-                selector,
-            )
-            if isinstance(examples, list):
-                return [str(item) for item in examples if isinstance(item, str)]
+        frame = self.challenge_frame
+        if frame is None:
             return []
+
+        try:
+            elements = await frame.query_selector_all(selector)
         except Exception:  # noqa: BLE001
             return []
+
+        results: List[str] = []
+        for element in elements:
+            try:
+                encoded = await self._element_to_base64(element)
+            except Exception:  # noqa: BLE001
+                encoded = None
+            if encoded:
+                results.append(encoded)
+            try:
+                await element.dispose()
+            except Exception:  # noqa: BLE001
+                pass
+        return results
 
 
     async def _collect_challenge_data(self) -> Optional[Dict[str, Any]]:
@@ -460,7 +458,7 @@ class HCaptchaSolver:
         if not body:
             return None
 
-        examples = await self._collect_example_images(".challenge-example .image .image")
+        examples = await self._collect_example_images(".challenge-example .image-wrapper .image")
         return {
             "question": question,
             "request_type": "Grid",
@@ -486,7 +484,7 @@ class HCaptchaSolver:
         question_lower = question.lower()
         is_canvas = has_header and "drag" not in question_lower
         request_type = "Canvas" if is_canvas else "Drag"
-        examples = await self._collect_example_images(".example-image .image")
+        examples = await self._collect_example_images(".image")
 
         return {
             "question": question,
@@ -925,3 +923,7 @@ class HCaptchaSolver:
         target_y = box["y"] + box["height"] / 2
         await self.motion.click(target_x, target_y)
         self._set_last_mouse_position(target_x, target_y)
+
+        
+        
+        
